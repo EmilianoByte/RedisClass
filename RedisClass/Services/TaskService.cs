@@ -16,6 +16,9 @@ public class TaskService(IDatabase redis, ILogger<TaskService> logger) : ITaskSe
     private const string StatsCreatedKey = "stats:tasks:created";
     private const string StatsCompletedKey = "stats:tasks:completed";
 
+    // This will be a suffix because the key will be something like task:ID:{suffix}.
+    private const string TaskLogSuffix = ":log";
+
     // JsonSerializerOptions for consistent serialization.
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -43,7 +46,7 @@ public class TaskService(IDatabase redis, ILogger<TaskService> logger) : ITaskSe
 
     public async Task<IEnumerable<TaskItem>> GetAllTasksAsync()
     {
-        // Get all task IDs from the Set
+        // Get all task IDs from the Set.
         var taskIds = await _redis.SetMembersAsync(TaskIdsKey);
 
         if (taskIds.Length == 0)
@@ -72,6 +75,20 @@ public class TaskService(IDatabase redis, ILogger<TaskService> logger) : ITaskSe
         return tasks;
     }
 
+    public async Task<List<string>> GetActivityLogAsync(string taskId)
+    {
+        if (string.IsNullOrWhiteSpace(taskId))
+            throw new ArgumentException("Task ID cannot be empty", nameof(taskId));
+
+        // Create key.
+        var logKey = $"{TaskPrefix}{taskId}{TaskLogSuffix}";
+
+        // Read all.
+        var entries = await _redis.ListRangeAsync(logKey, 0, -1);
+
+        return entries.Select(e => e.ToString()).ToList();
+    }
+
     public async Task<TaskItem> CreateTaskAsync(TaskItem task)
     {
         if (task == null)
@@ -93,6 +110,10 @@ public class TaskService(IDatabase redis, ILogger<TaskService> logger) : ITaskSe
         var key = GetTaskKey(task.Id);
         var json = JsonSerializer.Serialize(task, JsonOptions);
 
+        //await _redis.StringSetAsync(key, json);
+        //await _redis.SetAddAsync(TaskIdsKey, task.Id);
+        //await _redis.StringIncrementAsync(StatsCreatedKey);
+
         // Atomic transaction: save task + add to index + increment counter
         var transaction = _redis.CreateTransaction();
 
@@ -109,6 +130,9 @@ public class TaskService(IDatabase redis, ILogger<TaskService> logger) : ITaskSe
         }
 
         _logger.LogInformation("Created task {TaskId}: {TaskTitle}", task.Id, task.Title);
+
+        await AddActivityLogAsync(task.Id, "Task created");
+
         return task;
     }
 
@@ -144,6 +168,9 @@ public class TaskService(IDatabase redis, ILogger<TaskService> logger) : ITaskSe
         await _redis.StringSetAsync(key, json);
 
         _logger.LogInformation("Updated task {TaskId}", task.Id);
+
+        await AddActivityLogAsync(task.Id, $"Task updated (completed: {task.IsCompleted})");
+
         return true;
     }
 
@@ -190,4 +217,23 @@ public class TaskService(IDatabase redis, ILogger<TaskService> logger) : ITaskSe
     }
 
     private static string GetTaskKey(string id) => $"{TaskPrefix}{id}";
+
+    private async Task AddActivityLogAsync(string taskId, string action)
+    {
+        // Create log key.
+        var logKey = $"{TaskPrefix}{taskId}{TaskLogSuffix}";
+
+        var timestamp = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss");
+
+        // Create the log.
+        var entry = $"[{timestamp}] {action}";
+
+        // Add on the left.
+        await _redis.ListLeftPushAsync(logKey, entry);
+
+        // Control the list.
+        await _redis.ListTrimAsync(logKey, 0, 99);
+
+        _logger.LogInformation("Activity log added for task {TaskId}: {Action}", taskId, action);
+    }
 }

@@ -1,6 +1,7 @@
 using RedisClass.Interfaces;
 using RedisClass.Services;
 using StackExchange.Redis;
+using TaskAPI.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -27,13 +28,14 @@ builder.Services.AddScoped(sp =>
     sp.GetRequiredService<IConnectionMultiplexer>().GetDatabase());
 
 builder.Services.AddScoped<ITaskService, TaskService>();
+builder.Services.AddScoped<IUserService, UserService>();
 
 // Add controllers and API documentation.
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
 {
-    options.SwaggerDoc("v1", new Microsoft.OpenApi.Models.OpenApiInfo
+    options.SwaggerDoc("v1", new Microsoft.OpenApi.OpenApiInfo
     {
         Title = "Redis Class",
         Version = "v1",

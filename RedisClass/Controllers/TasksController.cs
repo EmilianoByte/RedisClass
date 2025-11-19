@@ -171,4 +171,37 @@ public class TasksController(ITaskService taskService, ILogger<TasksController> 
             return StatusCode(500, "Error retrieving statistics from Redis");
         }
     }
+
+    /// <summary>
+    /// Get activity log for a specific task
+    /// </summary>
+    [HttpGet("{id}/log")]
+    public async Task<ActionResult<List<string>>> GetTaskLog(string id)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(id))
+            {
+                return BadRequest("Task ID cannot be empty");
+            }
+
+            var log = await _taskService.GetActivityLogAsync(id);
+
+            if (log.Count == 0)
+            {
+                return NotFound($"No activity log found for task {id}");
+            }
+
+            return Ok(log);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(ex.Message);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting activity log for task {TaskId}", id);
+            return StatusCode(500, "Error retrieving activity log");
+        }
+    }
 }
