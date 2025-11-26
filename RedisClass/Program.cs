@@ -1,7 +1,6 @@
 using RedisClass.Interfaces;
 using RedisClass.Services;
 using StackExchange.Redis;
-using TaskAPI.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -29,6 +28,7 @@ builder.Services.AddScoped(sp =>
 
 builder.Services.AddScoped<ITaskService, TaskService>();
 builder.Services.AddScoped<IUserService, UserService>();
+builder.Services.AddScoped<ILeaderboardService, LeaderboardService>();
 
 // Add controllers and API documentation.
 builder.Services.AddControllers();

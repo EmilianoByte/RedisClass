@@ -1,8 +1,8 @@
 ﻿using Microsoft.AspNetCore.Mvc;
+using RedisClass.Interfaces;
 using RedisClass.Models;
-using TaskAPI.Services;
 
-namespace TaskAPI.Controllers
+namespace RedisClass.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]

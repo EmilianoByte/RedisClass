@@ -1,7 +1,8 @@
-﻿using RedisClass.Models;
+﻿using RedisClass.Interfaces;
+using RedisClass.Models;
 using StackExchange.Redis;
 
-namespace TaskAPI.Services
+namespace RedisClass.Services
 {
     public class UserService(IConnectionMultiplexer redis, ILogger<UserService> logger) : IUserService
     {

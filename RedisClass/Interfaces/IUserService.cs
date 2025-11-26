@@ -1,6 +1,6 @@
 ﻿using RedisClass.Models;
 
-namespace TaskAPI.Services
+namespace RedisClass.Interfaces
 {
     public interface IUserService
     {
