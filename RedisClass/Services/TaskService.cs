@@ -1,4 +1,6 @@
-﻿using RedisClass.Interfaces;
+﻿using NRedisStack;
+using NRedisStack.RedisStackCommands;
+using RedisClass.Interfaces;
 using RedisClass.Models;
 using StackExchange.Redis;
 using System.Text.Json;
@@ -26,6 +28,9 @@ public class TaskService(IDatabase redis, ILogger<TaskService> logger) : ITaskSe
         WriteIndented = false
     };
 
+    // Extension for RedisJSON.
+    private JsonCommands JsonCommands => _redis.JSON();
+
     public async Task<TaskItem?> GetTaskAsync(string id)
     {
         if (string.IsNullOrWhiteSpace(id))
@@ -34,14 +39,24 @@ public class TaskService(IDatabase redis, ILogger<TaskService> logger) : ITaskSe
         }
 
         var key = GetTaskKey(id);
-        var json = await _redis.StringGetAsync(key);
+        //var json = await _redis.StringGetAsync(key);
 
-        if (json.IsNullOrEmpty)
+        //if (json.IsNullOrEmpty)
+        //{
+        //    return null;
+        //}
+
+        //return JsonSerializer.Deserialize<TaskItem>(json!, JsonOptions);
+
+        // <TaskItem>: Internal type-safe deserialize.
+        var task = await JsonCommands.GetAsync<TaskItem>(key);
+
+        if (task == null)
         {
-            return null;
+            _logger.LogWarning("Task {TaskId} not found", id);
         }
 
-        return JsonSerializer.Deserialize<TaskItem>(json!, JsonOptions);
+        return task;
     }
 
     public async Task<IEnumerable<TaskItem>> GetAllTasksAsync()
@@ -54,21 +69,34 @@ public class TaskService(IDatabase redis, ILogger<TaskService> logger) : ITaskSe
             return Enumerable.Empty<TaskItem>();
         }
 
-        // Batch fetch for performance (single network round-trip)
-        var keys = taskIds.Select(id => (RedisKey)GetTaskKey(id.ToString())).ToArray();
-        var values = await _redis.StringGetAsync(keys);
+        //// Batch fetch for performance (single network round-trip)
+        //var keys = taskIds.Select(id => (RedisKey)GetTaskKey(id.ToString())).ToArray();
+        //var values = await _redis.StringGetAsync(keys);
+
+        //var tasks = new List<TaskItem>();
+
+        //foreach (var value in values)
+        //{
+        //    if (!value.IsNullOrEmpty)
+        //    {
+        //        var task = JsonSerializer.Deserialize<TaskItem>(value!, JsonOptions);
+        //        if (task != null)
+        //        {
+        //            tasks.Add(task);
+        //        }
+        //    }
+        //}
+
+        //return tasks;
 
         var tasks = new List<TaskItem>();
 
-        foreach (var value in values)
+        foreach (var id in taskIds)
         {
-            if (!value.IsNullOrEmpty)
+            var task = await JsonCommands.GetAsync<TaskItem>(GetTaskKey(id.ToString()));
+            if (task != null)
             {
-                var task = JsonSerializer.Deserialize<TaskItem>(value!, JsonOptions);
-                if (task != null)
-                {
-                    tasks.Add(task);
-                }
+                tasks.Add(task);
             }
         }
 
@@ -87,6 +115,25 @@ public class TaskService(IDatabase redis, ILogger<TaskService> logger) : ITaskSe
         var entries = await _redis.ListRangeAsync(logKey, 0, -1);
 
         return entries.Select(e => e.ToString()).ToList();
+    }
+
+    public async Task<TimeSpan?> GetTaskTTLAsync(string taskId)
+    {
+        if (string.IsNullOrWhiteSpace(taskId))
+            throw new ArgumentException("Task ID cannot be empty", nameof(taskId));
+
+        var key = GetTaskKey(taskId);
+
+        var ttl = await _redis.KeyTimeToLiveAsync(key);
+
+        if (!ttl.HasValue)
+            return null;
+
+        // Check for negative TTL (no TTL or not found).
+        if (ttl.Value.TotalSeconds < 0)
+            return null;
+
+        return ttl;
     }
 
     public async Task<TaskItem> CreateTaskAsync(TaskItem task)
@@ -136,6 +183,45 @@ public class TaskService(IDatabase redis, ILogger<TaskService> logger) : ITaskSe
         return task;
     }
 
+    public async Task<TaskItem> CreateTemporaryTaskAsync(TaskItem task, TimeSpan ttl)
+    {
+        if (task == null)
+            throw new ArgumentNullException(nameof(task));
+
+        if (string.IsNullOrWhiteSpace(task.Title))
+            throw new ArgumentException("Title is required", nameof(task));
+
+        if (ttl.TotalSeconds <= 0)
+            throw new ArgumentException("TTL must be positive", nameof(ttl));
+
+        // Initialize task fields.
+        task.Id = Guid.NewGuid().ToString();
+        task.CreatedAt = DateTime.UtcNow;
+        task.IsCompleted = false;
+
+        var key = GetTaskKey(task.Id);
+
+        var success = await JsonCommands.SetAsync(key, "$", task);
+
+        if (!success)
+            throw new InvalidOperationException("Failed to create temporary task");
+
+        // Set TTL for auto-delete.
+        await _redis.KeyExpireAsync(key, ttl);
+
+        // Activity log for temp task.
+        await AddActivityLogAsync(
+            task.Id,
+            $"Temporary task created (TTL: {ttl.TotalMinutes:F1} minutes)");
+
+        _logger.LogInformation(
+            "Created temporary task {TaskId} with TTL {TTL}",
+            task.Id,
+            ttl);
+
+        return task;
+    }
+
     public async Task<bool> UpdateTaskAsync(TaskItem task)
     {
         if (task == null)
@@ -164,13 +250,95 @@ public class TaskService(IDatabase redis, ILogger<TaskService> logger) : ITaskSe
             }
         }
 
-        var json = JsonSerializer.Serialize(task, JsonOptions);
-        await _redis.StringSetAsync(key, json);
+        var success = await JsonCommands.SetAsync(key, "$", task);
 
-        _logger.LogInformation("Updated task {TaskId}", task.Id);
+        if (!success)
+        {
+            _logger.LogError("Failed to update task {TaskId}", task.Id);
+            return false;
+        }
 
         await AddActivityLogAsync(task.Id, $"Task updated (completed: {task.IsCompleted})");
 
+        return true;
+    }
+
+    public async Task<bool> UpdateTaskFieldAsync(string taskId, string fieldPath, object value)
+    {
+        if (string.IsNullOrWhiteSpace(taskId))
+            throw new ArgumentException("Task ID cannot be empty", nameof(taskId));
+
+        if (string.IsNullOrWhiteSpace(fieldPath))
+            throw new ArgumentException("Field path cannot be empty", nameof(fieldPath));
+
+        var key = GetTaskKey(taskId);
+
+        // Check if task exists.
+        var exists = await _redis.KeyExistsAsync(key);
+        if (!exists)
+        {
+            _logger.LogWarning("Task {TaskId} not found for field update", taskId);
+            return false;
+        }
+
+        var success = await JsonCommands.SetAsync(key, fieldPath, value);
+
+        if (success)
+        {
+            _logger.LogInformation(
+                "Updated task {TaskId} field {Field} atomically",
+                taskId,
+                fieldPath);
+        }
+        else
+        {
+            _logger.LogError(
+                "Failed to update task {TaskId} field {Field}",
+                taskId,
+                fieldPath);
+        }
+
+        return success;
+    }
+
+    public async Task<bool> CompleteTaskAtomicAsync(string taskId)
+    {
+        if (string.IsNullOrWhiteSpace(taskId))
+            throw new ArgumentException("Task ID cannot be empty", nameof(taskId));
+
+        var key = GetTaskKey(taskId);
+
+        // Check task exists and not already completed.
+        var task = await GetTaskAsync(taskId);
+        if (task == null)
+        {
+            _logger.LogWarning("Task {TaskId} not found for completion", taskId);
+            return false;
+        }
+
+        if (task.IsCompleted)
+        {
+            _logger.LogInformation("Task {TaskId} already completed", taskId);
+            return true;
+        }
+
+        var completedAt = DateTime.UtcNow;
+
+        var isCompletedSuccess = await JsonCommands.SetAsync(key, "$.isCompleted", true);
+        var completedAtSuccess = await JsonCommands.SetAsync(key, "$.completedAt", completedAt);
+
+        if (!isCompletedSuccess || !completedAtSuccess)
+        {
+            _logger.LogError("Failed to update completion fields for task {TaskId}", taskId);
+            return false;
+        }
+
+        // Increment stats counter.
+        await _redis.StringIncrementAsync(StatsCompletedKey);
+
+        await AddActivityLogAsync(taskId, "Task completed (atomic fields)");
+
+        _logger.LogInformation("Task {TaskId} completed", taskId);
         return true;
     }
 

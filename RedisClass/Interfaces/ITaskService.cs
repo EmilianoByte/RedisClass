@@ -11,5 +11,9 @@ namespace RedisClass.Interfaces
         Task<bool> UpdateTaskAsync(TaskItem task);
         Task<bool> DeleteTaskAsync(string id);
         Task<Dictionary<string, int>> GetStatisticsAsync();
+        Task<bool> UpdateTaskFieldAsync(string taskId, string fieldPath, object value);
+        Task<bool> CompleteTaskAtomicAsync(string taskId);
+        Task<TaskItem> CreateTemporaryTaskAsync(TaskItem task, TimeSpan ttl);
+        Task<TimeSpan?> GetTaskTTLAsync(string taskId);
     }
 }
