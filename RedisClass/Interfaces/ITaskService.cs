@@ -15,5 +15,6 @@ namespace RedisClass.Interfaces
         Task<bool> CompleteTaskAtomicAsync(string taskId);
         Task<TaskItem> CreateTemporaryTaskAsync(TaskItem task, TimeSpan ttl);
         Task<TimeSpan?> GetTaskTTLAsync(string taskId);
+        Task<bool> CheckRateLimitAsync(string taskId);
     }
 }

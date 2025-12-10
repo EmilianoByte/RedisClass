@@ -20,6 +20,15 @@ public class TasksController(ITaskService taskService, ILogger<TasksController> 
     {
         try
         {
+            // Check rate limit (100 requests per minute).
+            var userId = User.Identity?.Name ?? "anonymous";
+            var allowed = await _taskService.CheckRateLimitAsync(userId);
+
+            if (!allowed)
+            {
+                return StatusCode(429, new { error = "Rate limit exceeded. Try again later." });
+            }
+
             var tasks = await _taskService.GetAllTasksAsync();
             return Ok(tasks);
         }
@@ -27,7 +36,7 @@ public class TasksController(ITaskService taskService, ILogger<TasksController> 
         {
             _logger.LogError(ex, "Error retrieving all tasks");
             return StatusCode(500, "Error retrieving tasks from Redis");
-        }
+        }       
     }
 
     /// <summary>

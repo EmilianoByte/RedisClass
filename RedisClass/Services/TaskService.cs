@@ -59,6 +59,33 @@ public class TaskService(IDatabase redis, ILogger<TaskService> logger) : ITaskSe
         return task;
     }
 
+    public async Task<TaskItem?> GetTaskWithCacheAsync(string id)
+    {
+        string key = GetTaskKey(id);
+        string cacheKey = $"cache:{id}";
+
+        // Check cache first
+        var cachedJson = await _redis.StringGetAsync(cacheKey);
+        if (!cachedJson.IsNullOrEmpty)
+        {
+            _logger.LogInformation("Cache HIT for {Id}", id);
+            return JsonSerializer.Deserialize<TaskItem>(cachedJson!, JsonOptions);
+        }
+
+        // Cache MISS - query source
+        _logger.LogInformation("Cache MISS for {Id}", id);
+        var task = await JsonCommands.GetAsync<TaskItem>(key);
+
+        // Populate cache with 5-min TTL.
+        if (task != null)
+        {
+            var json = JsonSerializer.Serialize(task, JsonOptions);
+            await _redis.StringSetAsync(cacheKey, json, TimeSpan.FromMinutes(5));
+        }
+
+        return task;
+    }
+
     public async Task<IEnumerable<TaskItem>> GetAllTasksAsync()
     {
         // Get all task IDs from the Set.
@@ -382,6 +409,42 @@ public class TaskService(IDatabase redis, ILogger<TaskService> logger) : ITaskSe
             ["totalCompleted"] = (int)(completedTask.Result.IsNullOrEmpty ? 0 : (long)completedTask.Result),
             ["activeTasks"] = (int)activeTask.Result
         };
+    }
+
+    public async Task<bool> CheckRateLimitAsync(string userId)
+    {
+        var script = @"
+        local key = KEYS[1]
+        local max_requests = tonumber(ARGV[1])
+        local window = tonumber(ARGV[2])
+        
+        local current = redis.call('GET', key)
+        
+        if current == false then
+            redis.call('SETEX', key, window, 1)
+            return max_requests - 1
+        end
+        
+        current = tonumber(current)
+        
+        if current >= max_requests then
+            return -1
+        end
+        
+        redis.call('INCR', key)
+        return max_requests - current - 1";
+
+        var keys = new RedisKey[] { $"ratelimit:{userId}" };
+
+        // 100 requests per 60 seconds.
+        var values = new RedisValue[] { 100, 60 };
+
+        var result = await _redis.ScriptEvaluateAsync(script, keys, values);
+
+        var remaining = (int)result;
+
+        // true = allowed, false = rate limited.
+        return remaining >= 0;
     }
 
     private static string GetTaskKey(string id) => $"{TaskPrefix}{id}";
