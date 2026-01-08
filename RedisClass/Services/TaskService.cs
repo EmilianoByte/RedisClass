@@ -31,6 +31,33 @@ public class TaskService(IDatabase redis, ILogger<TaskService> logger) : ITaskSe
     // Extension for RedisJSON.
     private JsonCommands JsonCommands => _redis.JSON();
 
+    public async Task CreateSearchIndexAsync()
+    {
+        try
+        {
+            // Try to drop existing index (ignore error if doesn't exist).
+            await _redis.ExecuteAsync("FT.DROPINDEX", "tasks_idx");
+        }
+        catch
+        {
+            // Index doesn't exist, that's ok.
+        }
+
+        // Create new index.
+        await _redis.ExecuteAsync(
+            "FT.CREATE", "tasks_idx",
+            "ON", "JSON",
+            "PREFIX", "1", "task:",
+            "SCHEMA",
+            "$.title", "AS", "title", "TEXT", "WEIGHT", "2.0",
+            "$.description", "AS", "description", "TEXT",
+            "$.isCompleted", "AS", "isCompleted", "TAG",
+            "$.createdAt", "AS", "createdAt", "NUMERIC", "SORTABLE",
+            "$.completedAt", "AS", "completedAt", "NUMERIC", "SORTABLE"
+        );
+    }
+
+
     public async Task<TaskItem?> GetTaskAsync(string id)
     {
         if (string.IsNullOrWhiteSpace(id))
@@ -59,6 +86,7 @@ public class TaskService(IDatabase redis, ILogger<TaskService> logger) : ITaskSe
         return task;
     }
 
+    // FOR EXAMPLE. DO NOT REPLICATE.
     public async Task<TaskItem?> GetTaskWithCacheAsync(string id)
     {
         string key = GetTaskKey(id);
@@ -186,6 +214,9 @@ public class TaskService(IDatabase redis, ILogger<TaskService> logger) : ITaskSe
 
         //await _redis.StringSetAsync(key, json);
         //await _redis.SetAddAsync(TaskIdsKey, task.Id);
+
+        // Puo succedere qualsiasi cosa da app B o C o D
+
         //await _redis.StringIncrementAsync(StatsCreatedKey);
 
         // Atomic transaction: save task + add to index + increment counter
@@ -194,6 +225,8 @@ public class TaskService(IDatabase redis, ILogger<TaskService> logger) : ITaskSe
         _ = transaction.StringSetAsync(key, json);
         _ = transaction.SetAddAsync(TaskIdsKey, task.Id);
         _ = transaction.StringIncrementAsync(StatsCreatedKey);
+
+        // Se app B fa qualcosa, non garantisco atomicità
 
         bool committed = await transaction.ExecuteAsync();
 

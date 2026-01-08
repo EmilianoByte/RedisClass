@@ -73,4 +73,20 @@ app.UseHttpsRedirection();
 app.UseAuthorization();
 app.MapControllers();
 
+using (var scope = app.Services.CreateScope())
+{
+    var taskService = scope.ServiceProvider.GetRequiredService<ITaskService>();
+
+    try
+    {
+        await taskService.CreateSearchIndexAsync();
+        Console.WriteLine("? RediSearch index created successfully");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"? Warning: Could not create RediSearch index: {ex.Message}");
+        Console.WriteLine("Search features may not work properly");
+    }
+}
+
 app.Run();
