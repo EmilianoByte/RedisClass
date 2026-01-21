@@ -1,4 +1,5 @@
 using RedisClass.Interfaces;
+using RedisClass.Interfaces.Vins;
 using RedisClass.Services;
 using StackExchange.Redis;
 
@@ -29,6 +30,8 @@ builder.Services.AddScoped(sp =>
 builder.Services.AddScoped<ITaskService, TaskService>();
 builder.Services.AddScoped<IUserService, UserService>();
 builder.Services.AddScoped<ILeaderboardService, LeaderboardService>();
+
+builder.Services.AddScoped<IVinService, VinService>();
 
 // Add controllers and API documentation.
 builder.Services.AddControllers();
@@ -80,11 +83,11 @@ using (var scope = app.Services.CreateScope())
     try
     {
         await taskService.CreateSearchIndexAsync();
-        Console.WriteLine("? RediSearch index created successfully");
+        Console.WriteLine("RediSearch index created successfully");
     }
     catch (Exception ex)
     {
-        Console.WriteLine($"? Warning: Could not create RediSearch index: {ex.Message}");
+        Console.WriteLine($"Warning: Could not create RediSearch index: {ex.Message}");
         Console.WriteLine("Search features may not work properly");
     }
 }
